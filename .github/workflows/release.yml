@@ -171,6 +171,7 @@ jobs:
             cp "objs/${MODULE_NAME}.so" "$package_dir/modules/${MODULE_NAME}.so"
             strip --strip-unneeded "$package_dir/modules/${MODULE_NAME}.so" || true
             cp "$GITHUB_WORKSPACE/examples/nginx.conf" "$package_dir/examples/nginx.conf"
+            cp "$GITHUB_WORKSPACE/examples/monitoring-site.conf" "$package_dir/examples/monitoring-site.conf"
             cp "$GITHUB_WORKSPACE/README.md" "$package_dir/README.md"
             cp "$GITHUB_WORKSPACE/docs/API.md" "$package_dir/docs/API.md"
             cp "$GITHUB_WORKSPACE/docs/CONFIGURATION.md" "$package_dir/docs/CONFIGURATION.md"
