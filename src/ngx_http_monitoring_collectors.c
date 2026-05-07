@@ -395,7 +395,10 @@ ngx_http_monitoring_collect_tcp(ngx_http_monitoring_shctx_t *sh)
             continue;
         }
 
-        (void) fgets(line, sizeof(line), fp);
+        if (fgets(line, sizeof(line), fp) == NULL) {
+            fclose(fp);
+            continue;
+        }
 
         while (fgets(line, sizeof(line), fp) != NULL) {
             state = 0;
