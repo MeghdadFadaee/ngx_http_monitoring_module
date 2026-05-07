@@ -1,0 +1,7 @@
+.idea
+build/
+objs/
+*.o
+*.so
+*.a
+*.log

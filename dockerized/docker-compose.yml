@@ -1,0 +1,12 @@
+services:
+  nginx-monitor:
+    build:
+      context: ..
+      dockerfile: dockerized/Dockerfile
+      args:
+        NGINX_VERSION: "1.28.0"
+    image: ngx-http-monitoring-module:local
+    container_name: ngx-http-monitoring-module
+    ports:
+      - "8080:8080"
+    restart: unless-stopped

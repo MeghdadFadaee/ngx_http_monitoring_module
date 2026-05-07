@@ -1,0 +1,9 @@
+.git
+.idea
+build
+objs
+*.o
+*.so
+*.a
+*.log
+dockerized/.cache
