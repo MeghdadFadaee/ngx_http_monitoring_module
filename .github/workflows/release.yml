@@ -1,0 +1,283 @@
+name: Build and Release Module
+
+"on":
+  workflow_dispatch:
+    inputs:
+      nginx_versions:
+        description: "Space-separated Nginx versions to build against"
+        required: true
+        default: "1.24.0 1.26.3 1.28.0"
+      version_bump:
+        description: "Semantic version part to increment from the latest v* tag"
+        required: true
+        type: choice
+        default: patch
+        options:
+          - patch
+          - minor
+          - major
+      push_image:
+        description: "Push Docker image to GHCR using the new tag"
+        type: boolean
+        required: true
+        default: true
+
+permissions:
+  contents: write
+  packages: write
+
+env:
+  DEFAULT_NGINX_VERSIONS: "1.24.0 1.26.3 1.28.0"
+  MODULE_NAME: ngx_http_monitoring_module
+  NGINX_CONFIGURE_ARGS: >-
+    --with-compat
+    --with-http_ssl_module
+    --with-http_stub_status_module
+    --with-http_realip_module
+    --with-http_v2_module
+    --with-http_gzip_static_module
+
+jobs:
+  release:
+    name: Build module and publish release
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Compute next release tag
+        id: version
+        shell: bash
+        env:
+          INPUT_VERSION_BUMP: ${{ github.event.inputs.version_bump }}
+        run: |
+          set -euo pipefail
+
+          git fetch --tags --force
+
+          latest_tag="$(
+            git tag -l 'v*' \
+              | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' \
+              | sort -V \
+              | tail -n 1 \
+              || true
+          )"
+          if [[ -z "$latest_tag" ]]; then
+            latest_tag="v0.0.0"
+          fi
+
+          version="${latest_tag#v}"
+          IFS='.' read -r major minor patch <<< "$version"
+
+          case "$INPUT_VERSION_BUMP" in
+            major)
+              major=$((major + 1))
+              minor=0
+              patch=0
+              ;;
+            minor)
+              minor=$((minor + 1))
+              patch=0
+              ;;
+            patch)
+              patch=$((patch + 1))
+              ;;
+            *)
+              echo "Unsupported version_bump: $INPUT_VERSION_BUMP" >&2
+              exit 1
+              ;;
+          esac
+
+          next_tag="v${major}.${minor}.${patch}"
+          while git rev-parse -q --verify "refs/tags/${next_tag}" >/dev/null; do
+            patch=$((patch + 1))
+            next_tag="v${major}.${minor}.${patch}"
+          done
+
+          {
+            printf 'NEXT_TAG=%s\n' "$next_tag"
+            printf 'NEXT_VERSION=%s\n' "${next_tag#v}"
+            printf 'LATEST_TAG=%s\n' "$latest_tag"
+          } >> "$GITHUB_ENV"
+
+          {
+            printf 'next_tag=%s\n' "$next_tag"
+            printf 'next_version=%s\n' "${next_tag#v}"
+            printf 'latest_tag=%s\n' "$latest_tag"
+          } >> "$GITHUB_OUTPUT"
+
+          echo "Latest tag: $latest_tag"
+          echo "Next tag: $next_tag"
+
+      - name: Install build dependencies
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential \
+            ca-certificates \
+            curl \
+            file \
+            libpcre2-dev \
+            libssl-dev \
+            zlib1g-dev
+
+      - name: Build release packages
+        shell: bash
+        env:
+          INPUT_NGINX_VERSIONS: ${{ github.event.inputs.nginx_versions }}
+        run: |
+          set -euo pipefail
+
+          versions="${INPUT_NGINX_VERSIONS:-$DEFAULT_NGINX_VERSIONS}"
+          mkdir -p "$GITHUB_WORKSPACE/dist" "$GITHUB_WORKSPACE/.release-work"
+
+          for nginx_version in $versions; do
+            workdir="$GITHUB_WORKSPACE/.release-work/nginx-$nginx_version"
+            archive="nginx-$nginx_version.tar.gz"
+
+            curl -fsSLo "$GITHUB_WORKSPACE/.release-work/$archive" \
+              "https://nginx.org/download/$archive"
+            tar -xzf "$GITHUB_WORKSPACE/.release-work/$archive" \
+              -C "$GITHUB_WORKSPACE/.release-work"
+
+            cd "$workdir"
+            ./configure \
+              --prefix=/usr/local/nginx \
+              --sbin-path=/usr/local/sbin/nginx \
+              --modules-path=/usr/local/nginx/modules \
+              --conf-path=/etc/nginx/nginx.conf \
+              --error-log-path=/var/log/nginx/error.log \
+              --http-log-path=/var/log/nginx/access.log \
+              --pid-path=/var/run/nginx.pid \
+              --lock-path=/var/run/nginx.lock \
+              --http-client-body-temp-path=/var/cache/nginx/client_temp \
+              --http-proxy-temp-path=/var/cache/nginx/proxy_temp \
+              --http-fastcgi-temp-path=/var/cache/nginx/fastcgi_temp \
+              --http-uwsgi-temp-path=/var/cache/nginx/uwsgi_temp \
+              --http-scgi-temp-path=/var/cache/nginx/scgi_temp \
+              $NGINX_CONFIGURE_ARGS \
+              --add-dynamic-module="$GITHUB_WORKSPACE"
+
+            make -j"$(nproc)" modules
+
+            package="${MODULE_NAME}-${NEXT_VERSION}-${NEXT_TAG}-nginx-${nginx_version}-linux-x86_64"
+            package_dir="$GITHUB_WORKSPACE/dist/$package"
+            mkdir -p "$package_dir/modules" "$package_dir/examples" "$package_dir/docs"
+
+            cp "objs/${MODULE_NAME}.so" "$package_dir/modules/${MODULE_NAME}.so"
+            strip --strip-unneeded "$package_dir/modules/${MODULE_NAME}.so" || true
+            cp "$GITHUB_WORKSPACE/examples/nginx.conf" "$package_dir/examples/nginx.conf"
+            cp "$GITHUB_WORKSPACE/README.md" "$package_dir/README.md"
+            cp "$GITHUB_WORKSPACE/docs/API.md" "$package_dir/docs/API.md"
+            cp "$GITHUB_WORKSPACE/docs/CONFIGURATION.md" "$package_dir/docs/CONFIGURATION.md"
+            cp "$GITHUB_WORKSPACE/docs/PERFORMANCE.md" "$package_dir/docs/PERFORMANCE.md"
+
+            {
+              printf 'module=%s\n' "$MODULE_NAME"
+              printf 'module_version=%s\n' "$NEXT_VERSION"
+              printf 'release_tag=%s\n' "$NEXT_TAG"
+              printf 'previous_tag=%s\n' "$LATEST_TAG"
+              printf 'nginx_version=%s\n' "$nginx_version"
+              printf 'target=linux-x86_64\n'
+              printf 'runner=ubuntu-22.04\n'
+              printf 'git_ref=%s\n' "$GITHUB_REF"
+              printf 'git_sha=%s\n' "$GITHUB_SHA"
+              printf 'configure_args=%s\n' "$NGINX_CONFIGURE_ARGS"
+              printf 'built_at=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            } > "$package_dir/METADATA.txt"
+
+            {
+              printf '# %s for Nginx %s\n\n' "$MODULE_NAME" "$nginx_version"
+              printf 'Release: `%s`\n\n' "$NEXT_TAG"
+              printf 'This package contains a prebuilt Linux x86_64 dynamic module:\n\n'
+              printf '```text\n'
+              printf 'modules/%s.so\n' "$MODULE_NAME"
+              printf '```\n\n'
+              printf 'Copy it into your Nginx modules directory and add this near the top of `nginx.conf`:\n\n'
+              printf '```nginx\n'
+              printf 'load_module modules/%s.so;\n' "$MODULE_NAME"
+              printf '```\n\n'
+              printf 'This binary is built with `--with-compat` against Nginx %s on Ubuntu 22.04. ' "$nginx_version"
+              printf 'For safest production use, run the same Nginx version and a compatible Linux/glibc environment. '
+              printf 'If your Nginx package has a materially different module ABI, rebuild from source with this repository.\n'
+            } > "$package_dir/INSTALL.md"
+
+            (
+              cd "$package_dir"
+              sha256sum "modules/${MODULE_NAME}.so" > SHA256SUMS
+              file "modules/${MODULE_NAME}.so" > FILE.txt
+            )
+
+            tar -czf "$GITHUB_WORKSPACE/dist/$package.tar.gz" \
+              -C "$GITHUB_WORKSPACE/dist" "$package"
+            rm -rf "$package_dir"
+          done
+
+          (
+            cd "$GITHUB_WORKSPACE/dist"
+            sha256sum *.tar.gz > SHA256SUMS.txt
+          )
+
+          {
+            printf '# ngx_http_monitoring_module %s\n\n' "$NEXT_TAG"
+            printf 'Previous tag: `%s`\n\n' "$LATEST_TAG"
+            printf 'Prebuilt Linux x86_64 dynamic module packages are attached.\n\n'
+            printf 'Each tarball is built against the Nginx version in its filename and includes:\n\n'
+            printf -- '- `modules/%s.so`\n' "$MODULE_NAME"
+            printf -- '- `INSTALL.md`\n'
+            printf -- '- `METADATA.txt`\n'
+            printf -- '- `SHA256SUMS`\n'
+            printf -- '- example configuration and API docs\n\n'
+            printf 'Nginx dynamic modules are ABI-sensitive. Use the package matching your Nginx version and rebuild locally if your Nginx distribution uses incompatible build options.\n'
+          } > "$GITHUB_WORKSPACE/dist/RELEASE_NOTES.md"
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ngx-http-monitoring-module-${{ steps.version.outputs.next_tag }}-release-assets
+          path: |
+            dist/*.tar.gz
+            dist/SHA256SUMS.txt
+            dist/RELEASE_NOTES.md
+          if-no-files-found: error
+
+      - name: Create incremented tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$NEXT_TAG" -m "Release $NEXT_TAG"
+          git push origin "$NEXT_TAG"
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release create "$NEXT_TAG" dist/*.tar.gz dist/SHA256SUMS.txt \
+            --title "$NEXT_TAG" \
+            --notes-file dist/RELEASE_NOTES.md
+
+      - name: Build and push Docker image
+        if: github.event.inputs.push_image == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          image_repo="$(echo "ghcr.io/${GITHUB_REPOSITORY}" | tr '[:upper:]' '[:lower:]')"
+
+          docker build \
+            -f dockerized/Dockerfile \
+            -t "$image_repo:$NEXT_TAG" \
+            -t "$image_repo:latest" \
+            .
+
+          echo "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          docker push "$image_repo:$NEXT_TAG"
+          docker push "$image_repo:latest"

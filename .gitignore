@@ -1,5 +1,7 @@
 .idea
 build/
+dist/
+/.release-work/
 objs/
 *.o
 *.so

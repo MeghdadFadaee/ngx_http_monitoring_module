@@ -55,7 +55,13 @@ http://127.0.0.1:8080/monitor
 
 A reusable Codex skill for clients and agents is available at `skills/ngx-http-monitoring-client/SKILL.md`. It covers JSON, SSE, Prometheus, API token usage, and Nginx Basic Auth.
 
-## Load it from `nginx.conf`:
+## GitHub Releases
+
+The repository includes a manual GitHub Actions workflow at `.github/workflows/release.yml` that computes the next `vMAJOR.MINOR.PATCH` tag, builds Linux x86_64 dynamic module tarballs, pushes the tag, and publishes the release. See `docs/RELEASES.md` for release asset format and compatibility notes.
+
+## Load The Module
+
+Load it from `nginx.conf`:
 
 ```nginx
 load_module modules/ngx_http_monitoring_module.so;
