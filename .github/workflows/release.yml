@@ -6,7 +6,7 @@ name: Build and Release Module
       nginx_versions:
         description: "Space-separated Nginx versions to build against"
         required: true
-        default: "1.24.0 1.26.3 1.28.0"
+        default: "1.22.1 1.24.0 1.26.3 1.28.0"
       version_bump:
         description: "Semantic version part to increment from the latest v* tag"
         required: true
@@ -27,7 +27,7 @@ permissions:
   packages: write
 
 env:
-  DEFAULT_NGINX_VERSIONS: "1.24.0 1.26.3 1.28.0"
+  DEFAULT_NGINX_VERSIONS: "1.22.1 1.24.0 1.26.3 1.28.0"
   MODULE_NAME: ngx_http_monitoring_module
   NGINX_CONFIGURE_ARGS: >-
     --with-compat
