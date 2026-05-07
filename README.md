@@ -51,7 +51,11 @@ Then open:
 http://127.0.0.1:8080/monitor
 ```
 
-Load it from `nginx.conf`:
+## Agent Skill
+
+A reusable Codex skill for clients and agents is available at `skills/ngx-http-monitoring-client/SKILL.md`. It covers JSON, SSE, Prometheus, API token usage, and Nginx Basic Auth.
+
+## Load it from `nginx.conf`:
 
 ```nginx
 load_module modules/ngx_http_monitoring_module.so;
