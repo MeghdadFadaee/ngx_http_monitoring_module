@@ -1,0 +1,253 @@
+name: Test Module Build
+
+"on":
+  push:
+    branches:
+      - "**"
+    tags-ignore:
+      - "**"
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  NGINX_CONFIGURE_ARGS: >-
+    --with-compat
+    --with-http_ssl_module
+    --with-http_stub_status_module
+    --with-http_realip_module
+    --with-http_v2_module
+    --with-http_gzip_static_module
+
+jobs:
+  build-and-configure:
+    name: Nginx ${{ matrix.nginx-version }}
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+
+    strategy:
+      fail-fast: false
+      matrix:
+        nginx-version:
+          - "1.24.0"
+          - "1.26.3"
+          - "1.28.0"
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential \
+            ca-certificates \
+            curl \
+            file \
+            jq \
+            libpcre2-dev \
+            libssl-dev \
+            zlib1g-dev
+
+      - name: Download Nginx source
+        shell: bash
+        env:
+          NGINX_VERSION: ${{ matrix.nginx-version }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$GITHUB_WORKSPACE/.ci-nginx"
+          curl -fsSLo "$GITHUB_WORKSPACE/.ci-nginx/nginx-${NGINX_VERSION}.tar.gz" \
+            "https://nginx.org/download/nginx-${NGINX_VERSION}.tar.gz"
+          tar -xzf "$GITHUB_WORKSPACE/.ci-nginx/nginx-${NGINX_VERSION}.tar.gz" \
+            -C "$GITHUB_WORKSPACE/.ci-nginx"
+
+      - name: Configure Nginx with module
+        shell: bash
+        env:
+          NGINX_VERSION: ${{ matrix.nginx-version }}
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE/.ci-nginx/nginx-${NGINX_VERSION}"
+          ./configure \
+            --prefix=/usr/local/nginx \
+            --sbin-path=/usr/local/sbin/nginx \
+            --modules-path=/usr/local/nginx/modules \
+            --conf-path=/etc/nginx/nginx.conf \
+            --error-log-path=/var/log/nginx/error.log \
+            --http-log-path=/var/log/nginx/access.log \
+            --pid-path=/var/run/nginx.pid \
+            --lock-path=/var/run/nginx.lock \
+            --http-client-body-temp-path=/var/cache/nginx/client_temp \
+            --http-proxy-temp-path=/var/cache/nginx/proxy_temp \
+            --http-fastcgi-temp-path=/var/cache/nginx/fastcgi_temp \
+            --http-uwsgi-temp-path=/var/cache/nginx/uwsgi_temp \
+            --http-scgi-temp-path=/var/cache/nginx/scgi_temp \
+            $NGINX_CONFIGURE_ARGS \
+            --add-dynamic-module="$GITHUB_WORKSPACE"
+
+      - name: Build Nginx binary and dynamic module
+        shell: bash
+        env:
+          NGINX_VERSION: ${{ matrix.nginx-version }}
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE/.ci-nginx/nginx-${NGINX_VERSION}"
+          make -j"$(nproc)"
+          make -j"$(nproc)" modules
+          test -x objs/nginx
+          test -f objs/ngx_http_monitoring_module.so
+          file objs/nginx
+          file objs/ngx_http_monitoring_module.so
+
+      - name: Validate generated Nginx configuration
+        shell: bash
+        env:
+          NGINX_VERSION: ${{ matrix.nginx-version }}
+        run: |
+          set -euo pipefail
+
+          nginx_src="$GITHUB_WORKSPACE/.ci-nginx/nginx-${NGINX_VERSION}"
+          run_root="$GITHUB_WORKSPACE/.ci-runtime/nginx-${NGINX_VERSION}"
+          module_path="$nginx_src/objs/ngx_http_monitoring_module.so"
+          config_path="$run_root/nginx.conf"
+
+          mkdir -p \
+            "$run_root/logs" \
+            "$run_root/temp/client_body" \
+            "$run_root/temp/proxy" \
+            "$run_root/temp/fastcgi" \
+            "$run_root/temp/uwsgi" \
+            "$run_root/temp/scgi"
+
+          {
+            printf 'load_module %s;\n\n' "$module_path"
+            printf 'worker_processes 1;\n'
+            printf 'error_log %s/logs/error.log info;\n' "$run_root"
+            printf 'pid %s/logs/nginx.pid;\n\n' "$run_root"
+            printf 'events {\n'
+            printf '    worker_connections 1024;\n'
+            printf '}\n\n'
+            printf 'http {\n'
+            printf '    access_log off;\n'
+            printf '    default_type application/octet-stream;\n'
+            printf '    client_body_temp_path %s/temp/client_body;\n' "$run_root"
+            printf '    proxy_temp_path %s/temp/proxy;\n' "$run_root"
+            printf '    fastcgi_temp_path %s/temp/fastcgi;\n' "$run_root"
+            printf '    uwsgi_temp_path %s/temp/uwsgi;\n' "$run_root"
+            printf '    scgi_temp_path %s/temp/scgi;\n\n' "$run_root"
+            printf '    monitor_refresh_interval 1s;\n'
+            printf '    monitor_history 1m;\n'
+            printf '    monitor_resolution 1s;\n'
+            printf '    monitor_shm_size 8m;\n'
+            printf '    monitor_collect_system on;\n'
+            printf '    monitor_collect_nginx on;\n'
+            printf '    monitor_collect_network on;\n'
+            printf '    monitor_access_log on;\n'
+            printf '    monitor_max_top_urls 100;\n\n'
+            printf '    server {\n'
+            printf '        listen 127.0.0.1:18080;\n'
+            printf '        server_name localhost;\n\n'
+            printf '        location /monitor {\n'
+            printf '            monitor on;\n'
+            printf '            monitor_dashboard on;\n'
+            printf '            monitor_api on;\n'
+            printf '            monitor_sse on;\n'
+            printf '            monitor_allow all;\n'
+            printf '            monitor_basic_auth off;\n'
+            printf '            monitor_cors off;\n'
+            printf '            monitor_rate_limit 120;\n'
+            printf '        }\n\n'
+            printf '        location / {\n'
+            printf '            return 200 "ok\\n";\n'
+            printf '        }\n'
+            printf '    }\n'
+            printf '}\n'
+          } > "$config_path"
+
+          "$nginx_src/objs/nginx" -t -p "$run_root" -c "$config_path"
+
+      - name: Run Nginx and test monitoring routes
+        shell: bash
+        env:
+          NGINX_VERSION: ${{ matrix.nginx-version }}
+        run: |
+          set -euo pipefail
+
+          nginx_src="$GITHUB_WORKSPACE/.ci-nginx/nginx-${NGINX_VERSION}"
+          run_root="$GITHUB_WORKSPACE/.ci-runtime/nginx-${NGINX_VERSION}"
+          config_path="$run_root/nginx.conf"
+          base_url="http://127.0.0.1:18080"
+
+          "$nginx_src/objs/nginx" -p "$run_root" -c "$config_path"
+          trap '"$nginx_src/objs/nginx" -p "$run_root" -c "$config_path" -s quit || true' EXIT
+
+          for attempt in $(seq 1 50); do
+            if curl -fsS "$base_url/" >/dev/null; then
+              break
+            fi
+
+            if [[ "$attempt" -eq 50 ]]; then
+              echo "Nginx did not become ready" >&2
+              exit 1
+            fi
+
+            sleep 0.2
+          done
+
+          curl -fsS "$base_url/" | grep -q '^ok'
+
+          dashboard="$(curl -fsS "$base_url/monitor")"
+          printf '%s' "$dashboard" | grep -q '<title>Nginx Monitor</title>'
+          printf '%s' "$dashboard" | grep -q '/monitor/api'
+          printf '%s' "$dashboard" | grep -q '/monitor/live'
+
+          curl -fsS "$base_url/monitor/api" \
+            | jq -e '.version == 1 and .scope == "full" and has("system") and has("nginx") and has("requests") and has("history")'
+
+          curl -fsS "$base_url/monitor/api/system" \
+            | jq -e '.version == 1 and .scope == "system" and has("system") and .system.cpu.cores >= 0'
+
+          curl -fsS "$base_url/monitor/api/nginx" \
+            | jq -e '.version == 1 and .scope == "nginx" and has("nginx") and .nginx.requests.total >= 0'
+
+          curl -fsS "$base_url/monitor/api/network" \
+            | jq -e '.version == 1 and .scope == "network" and has("network") and (.network.interfaces | type == "array")'
+
+          curl -fsS "$base_url/monitor/api/disk" \
+            | jq -e '.version == 1 and .scope == "disk" and has("disk") and (.disk.devices | type == "array")'
+
+          curl -fsS "$base_url/monitor/api/processes" \
+            | jq -e '.version == 1 and .scope == "processes" and has("processes") and .processes.process_count >= 0'
+
+          curl -fsS "$base_url/monitor/api/upstreams" \
+            | jq -e '.version == 1 and .scope == "upstreams" and (.upstreams | type == "array")'
+
+          curl -fsS "$base_url/monitor/api/connections" \
+            | jq -e '.version == 1 and .scope == "connections" and has("connections") and .connections.active >= 0'
+
+          curl -fsS "$base_url/monitor/api/requests" \
+            | jq -e '.version == 1 and .scope == "requests" and has("requests") and .requests.total >= 0'
+
+          curl -fsS "$base_url/monitor/health" \
+            | jq -e '.version == 1 and .scope == "health" and .status == "ok"'
+
+          curl -fsS "$base_url/monitor/metrics" \
+            | grep -q '^nginx_monitor_requests_total '
+
+          sse_output="$(timeout 5s curl -fsS -N "$base_url/monitor/live" || true)"
+          printf '%s' "$sse_output" | grep -q '^event: metrics'
+          printf '%s' "$sse_output" | grep -q '^data: {'
+
+      - name: Upload failed nginx logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nginx-${{ matrix.nginx-version }}-test-logs
+          path: |
+            .ci-runtime/nginx-${{ matrix.nginx-version }}/logs/*.log
+            .ci-runtime/nginx-${{ matrix.nginx-version }}/nginx.conf
+          if-no-files-found: ignore

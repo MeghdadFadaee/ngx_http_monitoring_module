@@ -59,6 +59,10 @@ A reusable Codex skill for clients and agents is available at `skills/ngx-http-m
 
 The repository includes a manual GitHub Actions workflow at `.github/workflows/release.yml` that computes the next `vMAJOR.MINOR.PATCH` tag, builds Linux x86_64 dynamic module tarballs, pushes the tag, and publishes the release. See `docs/RELEASES.md` for release asset format and compatibility notes.
 
+## CI Tests
+
+`.github/workflows/test.yml` runs on pushes and pull requests. It builds Nginx and the dynamic module against common Nginx versions, runs `nginx -t`, starts the built server, and checks the dashboard, JSON API, health, Prometheus, and SSE routes.
+
 ## Load The Module
 
 Load it from `nginx.conf`:
