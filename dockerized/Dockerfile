@@ -77,6 +77,7 @@ RUN apt-get update \
 
 COPY --from=builder /usr/local/nginx /usr/local/nginx
 COPY --from=builder /usr/local/sbin/nginx /usr/local/sbin/nginx
+COPY assets/favicon.ico /usr/local/nginx/html/favicon.ico
 COPY dockerized/nginx.conf /etc/nginx/nginx.conf
 
 EXPOSE 8080

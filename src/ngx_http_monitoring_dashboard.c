@@ -3,7 +3,8 @@
 static const u_char ngx_http_monitoring_dashboard_html[] =
 "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
 "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
-"<title>Nginx Monitor</title><style>"
+"<title>Nginx Monitor</title><link rel=\"icon\" type=\"image/svg+xml\" href=\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%230b0f14'/%3E%3Ccircle cx='32' cy='32' r='24' fill='%23111821' stroke='%23263344' stroke-width='3'/%3E%3Cpath d='M14 36h9l5-18 8 30 5-16h9' fill='none' stroke='%2345d4d0' stroke-width='5' stroke-linecap='round' stroke-linejoin='round'/%3E%3Cpath d='M17 20h30' fill='none' stroke='%2345d483' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E\">"
+"<style>"
 ":root{color-scheme:dark;--bg:#0b0f14;--panel:#111821;--panel2:#151f2b;--line:#263344;--text:#e6edf3;--muted:#8fa1b3;--green:#45d483;--red:#ff5f6d;--yellow:#f4c95d;--blue:#5aa9ff;--cyan:#45d4d0}"
 "*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:14px/1.45 system-ui,-apple-system,Segoe UI,sans-serif}"
 "header{height:58px;display:flex;align-items:center;justify-content:space-between;padding:0 20px;border-bottom:1px solid var(--line);background:#0f151d;position:sticky;top:0;z-index:5}"

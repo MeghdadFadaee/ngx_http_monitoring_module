@@ -54,6 +54,7 @@ sh dockerized/test.sh
 - Nginx binary: `/usr/local/sbin/nginx`
 - Module: `/usr/local/nginx/modules/ngx_http_monitoring_module.so`
 - Config: `/etc/nginx/nginx.conf`
+- Favicon: `/usr/local/nginx/html/favicon.ico`, served at `/favicon.ico`
 - Listen port: `8080`
 
 The supplied `nginx.conf` enables:
