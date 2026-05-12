@@ -214,7 +214,7 @@ jobs:
             esac
 
             echo "::group::Build ${target_arch} release packages"
-            docker run --rm \
+            docker run --rm -i \
               --platform "$docker_platform" \
               -e BUILD_NGINX_VERSIONS="$versions" \
               -e DOCKER_PLATFORM="$docker_platform" \

@@ -63,7 +63,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          docker run --rm \
+          docker run --rm -i \
             --platform "$DOCKER_PLATFORM" \
             -e NGINX_VERSION \
             -e TARGET_ARCH \
