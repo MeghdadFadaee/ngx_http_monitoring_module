@@ -6,7 +6,11 @@ name: Build and Release Module
       nginx_versions:
         description: "Space-separated Nginx versions to build against"
         required: true
-        default: "1.22.1 1.24.0 1.26.3 1.28.0"
+        default: "1.22.1 1.24.0 1.26.3 1.28.0 1.30.0"
+      target_arches:
+        description: "Space-separated targets: linux-x86_64 linux-arm64 linux-armv7"
+        required: true
+        default: "linux-x86_64 linux-arm64 linux-armv7"
       version_bump:
         description: "Semantic version part to increment from the latest v* tag"
         required: true
@@ -17,7 +21,7 @@ name: Build and Release Module
           - minor
           - major
       push_image:
-        description: "Push Docker image to GHCR using the new tag"
+        description: "Push multi-platform Docker image to GHCR using the new tag"
         type: boolean
         required: true
         default: true
@@ -27,8 +31,10 @@ permissions:
   packages: write
 
 env:
-  DEFAULT_NGINX_VERSIONS: "1.22.1 1.24.0 1.26.3 1.28.0"
+  DEFAULT_NGINX_VERSIONS: "1.22.1 1.24.0 1.26.3 1.28.0 1.30.0"
+  DEFAULT_TARGET_ARCHES: "linux-x86_64 linux-arm64 linux-armv7"
   MODULE_NAME: ngx_http_monitoring_module
+  RELEASE_BUILD_IMAGE: ubuntu:22.04
   NGINX_CONFIGURE_ARGS: >-
     --with-compat
     --with-http_ssl_module
@@ -41,6 +47,7 @@ jobs:
   release:
     name: Build module and publish release
     runs-on: ubuntu-22.04
+    timeout-minutes: 120
 
     steps:
       - name: Check out repository
@@ -112,11 +119,124 @@ jobs:
           echo "Latest tag: $latest_tag"
           echo "Next tag: $next_tag"
 
-      - name: Install build dependencies
+      - name: Normalize target architectures
+        id: targets
+        shell: bash
+        env:
+          INPUT_TARGET_ARCHES: ${{ github.event.inputs.target_arches }}
         run: |
           set -euo pipefail
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
+
+          raw_targets="${INPUT_TARGET_ARCHES:-$DEFAULT_TARGET_ARCHES}"
+          normalized_targets=""
+          docker_platforms=""
+
+          add_target() {
+            local target_arch="$1"
+            local docker_platform="$2"
+
+            case " $normalized_targets " in
+              *" $target_arch "*)
+                return
+                ;;
+            esac
+
+            normalized_targets="${normalized_targets}${normalized_targets:+ }${target_arch}"
+            docker_platforms="${docker_platforms}${docker_platforms:+,}${docker_platform}"
+          }
+
+          for raw_target in $raw_targets; do
+            case "$raw_target" in
+              linux-x86_64|x86_64|amd64|linux-amd64)
+                add_target "linux-x86_64" "linux/amd64"
+                ;;
+              linux-arm64|linux-aarch64|arm64|aarch64)
+                add_target "linux-arm64" "linux/arm64"
+                ;;
+              linux-armv7|linux-armhf|armv7|armhf)
+                add_target "linux-armv7" "linux/arm/v7"
+                ;;
+              *)
+                echo "Unsupported target_arches entry: $raw_target" >&2
+                echo "Supported entries: linux-x86_64 linux-arm64 linux-armv7" >&2
+                exit 1
+                ;;
+            esac
+          done
+
+          if [[ -z "$normalized_targets" ]]; then
+            echo "No release target architectures were selected" >&2
+            exit 1
+          fi
+
+          {
+            printf 'target_arches=%s\n' "$normalized_targets"
+            printf 'docker_platforms=%s\n' "$docker_platforms"
+          } >> "$GITHUB_OUTPUT"
+
+          echo "Release targets: $normalized_targets"
+          echo "Docker platforms: $docker_platforms"
+
+      - name: Set up QEMU for ARM builds
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64,arm
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build release packages
+        shell: bash
+        env:
+          INPUT_NGINX_VERSIONS: ${{ github.event.inputs.nginx_versions }}
+          NORMALIZED_TARGET_ARCHES: ${{ steps.targets.outputs.target_arches }}
+        run: |
+          set -euo pipefail
+
+          versions="${INPUT_NGINX_VERSIONS:-$DEFAULT_NGINX_VERSIONS}"
+          mkdir -p "$GITHUB_WORKSPACE/dist" "$GITHUB_WORKSPACE/.release-work"
+
+          for target_arch in $NORMALIZED_TARGET_ARCHES; do
+            case "$target_arch" in
+              linux-x86_64)
+                docker_platform="linux/amd64"
+                ;;
+              linux-arm64)
+                docker_platform="linux/arm64"
+                ;;
+              linux-armv7)
+                docker_platform="linux/arm/v7"
+                ;;
+              *)
+                echo "Unexpected normalized target: $target_arch" >&2
+                exit 1
+                ;;
+            esac
+
+            echo "::group::Build ${target_arch} release packages"
+            docker run --rm \
+              --platform "$docker_platform" \
+              -e BUILD_NGINX_VERSIONS="$versions" \
+              -e DOCKER_PLATFORM="$docker_platform" \
+              -e GITHUB_REF \
+              -e GITHUB_SHA \
+              -e LATEST_TAG \
+              -e MODULE_NAME \
+              -e NEXT_TAG \
+              -e NEXT_VERSION \
+              -e NGINX_CONFIGURE_ARGS \
+              -e RELEASE_BUILD_IMAGE \
+              -e TARGET_ARCH="$target_arch" \
+              -v "$GITHUB_WORKSPACE:/work" \
+              -w /work \
+              "$RELEASE_BUILD_IMAGE" \
+              bash -s <<'BUILD_SCRIPT'
+          set -euo pipefail
+
+          export DEBIAN_FRONTEND=noninteractive
+
+          apt-get update
+          apt-get install -y --no-install-recommends \
             build-essential \
             ca-certificates \
             curl \
@@ -124,25 +244,25 @@ jobs:
             libpcre2-dev \
             libssl-dev \
             zlib1g-dev
+          rm -rf /var/lib/apt/lists/*
 
-      - name: Build release packages
-        shell: bash
-        env:
-          INPUT_NGINX_VERSIONS: ${{ github.event.inputs.nginx_versions }}
-        run: |
-          set -euo pipefail
+          target_workdir="/work/.release-work/${TARGET_ARCH}"
+          mkdir -p "$target_workdir" /work/dist
 
-          versions="${INPUT_NGINX_VERSIONS:-$DEFAULT_NGINX_VERSIONS}"
-          mkdir -p "$GITHUB_WORKSPACE/dist" "$GITHUB_WORKSPACE/.release-work"
+          for nginx_version in $BUILD_NGINX_VERSIONS; do
+            echo "::group::Nginx ${nginx_version} (${TARGET_ARCH})"
 
-          for nginx_version in $versions; do
-            workdir="$GITHUB_WORKSPACE/.release-work/nginx-$nginx_version"
-            archive="nginx-$nginx_version.tar.gz"
+            archive="nginx-${nginx_version}.tar.gz"
+            archive_path="${target_workdir}/${archive}"
+            workdir="${target_workdir}/nginx-${nginx_version}"
 
-            curl -fsSLo "$GITHUB_WORKSPACE/.release-work/$archive" \
-              "https://nginx.org/download/$archive"
-            tar -xzf "$GITHUB_WORKSPACE/.release-work/$archive" \
-              -C "$GITHUB_WORKSPACE/.release-work"
+            if [[ ! -f "$archive_path" ]]; then
+              curl -fsSLo "$archive_path" \
+                "https://nginx.org/download/${archive}"
+            fi
+
+            rm -rf "$workdir"
+            tar -xzf "$archive_path" -C "$target_workdir"
 
             cd "$workdir"
             ./configure \
@@ -160,22 +280,22 @@ jobs:
               --http-uwsgi-temp-path=/var/cache/nginx/uwsgi_temp \
               --http-scgi-temp-path=/var/cache/nginx/scgi_temp \
               $NGINX_CONFIGURE_ARGS \
-              --add-dynamic-module="$GITHUB_WORKSPACE"
+              --add-dynamic-module=/work
 
             make -j"$(nproc)" modules
 
-            package="${MODULE_NAME}-${NEXT_VERSION}-${NEXT_TAG}-nginx-${nginx_version}-linux-x86_64"
-            package_dir="$GITHUB_WORKSPACE/dist/$package"
+            package="${MODULE_NAME}-${NEXT_TAG}-nginx-${nginx_version}-${TARGET_ARCH}"
+            package_dir="/work/dist/$package"
             mkdir -p "$package_dir/modules" "$package_dir/examples" "$package_dir/docs"
 
             cp "objs/${MODULE_NAME}.so" "$package_dir/modules/${MODULE_NAME}.so"
             strip --strip-unneeded "$package_dir/modules/${MODULE_NAME}.so" || true
-            cp "$GITHUB_WORKSPACE/examples/nginx.conf" "$package_dir/examples/nginx.conf"
-            cp "$GITHUB_WORKSPACE/examples/monitoring-site.conf" "$package_dir/examples/monitoring-site.conf"
-            cp "$GITHUB_WORKSPACE/README.md" "$package_dir/README.md"
-            cp "$GITHUB_WORKSPACE/docs/API.md" "$package_dir/docs/API.md"
-            cp "$GITHUB_WORKSPACE/docs/CONFIGURATION.md" "$package_dir/docs/CONFIGURATION.md"
-            cp "$GITHUB_WORKSPACE/docs/PERFORMANCE.md" "$package_dir/docs/PERFORMANCE.md"
+            cp /work/examples/nginx.conf "$package_dir/examples/nginx.conf"
+            cp /work/examples/monitoring-site.conf "$package_dir/examples/monitoring-site.conf"
+            cp /work/README.md "$package_dir/README.md"
+            cp /work/docs/API.md "$package_dir/docs/API.md"
+            cp /work/docs/CONFIGURATION.md "$package_dir/docs/CONFIGURATION.md"
+            cp /work/docs/PERFORMANCE.md "$package_dir/docs/PERFORMANCE.md"
 
             {
               printf 'module=%s\n' "$MODULE_NAME"
@@ -183,7 +303,10 @@ jobs:
               printf 'release_tag=%s\n' "$NEXT_TAG"
               printf 'previous_tag=%s\n' "$LATEST_TAG"
               printf 'nginx_version=%s\n' "$nginx_version"
-              printf 'target=linux-x86_64\n'
+              printf 'target=%s\n' "$TARGET_ARCH"
+              printf 'docker_platform=%s\n' "$DOCKER_PLATFORM"
+              printf 'build_image=%s\n' "$RELEASE_BUILD_IMAGE"
+              printf 'build_machine=%s\n' "$(uname -m)"
               printf 'runner=ubuntu-22.04\n'
               printf 'git_ref=%s\n' "$GITHUB_REF"
               printf 'git_sha=%s\n' "$GITHUB_SHA"
@@ -194,7 +317,8 @@ jobs:
             {
               printf '# %s for Nginx %s\n\n' "$MODULE_NAME" "$nginx_version"
               printf 'Release: `%s`\n\n' "$NEXT_TAG"
-              printf 'This package contains a prebuilt Linux x86_64 dynamic module:\n\n'
+              printf 'Target: `%s` (`%s`)\n\n' "$TARGET_ARCH" "$DOCKER_PLATFORM"
+              printf 'This package contains a prebuilt Linux dynamic module:\n\n'
               printf '```text\n'
               printf 'modules/%s.so\n' "$MODULE_NAME"
               printf '```\n\n'
@@ -202,8 +326,8 @@ jobs:
               printf '```nginx\n'
               printf 'load_module modules/%s.so;\n' "$MODULE_NAME"
               printf '```\n\n'
-              printf 'This binary is built with `--with-compat` against Nginx %s on Ubuntu 22.04. ' "$nginx_version"
-              printf 'For safest production use, run the same Nginx version and a compatible Linux/glibc environment. '
+              printf 'This binary is built with `--with-compat` against Nginx %s on Ubuntu 22.04 for %s. ' "$nginx_version" "$TARGET_ARCH"
+              printf 'For safest production use, run the same Nginx version, CPU architecture, and a compatible Linux/glibc environment. '
               printf 'If your Nginx package has a materially different module ABI, rebuild from source with this repository.\n'
             } > "$package_dir/INSTALL.md"
 
@@ -213,9 +337,13 @@ jobs:
               file "modules/${MODULE_NAME}.so" > FILE.txt
             )
 
-            tar -czf "$GITHUB_WORKSPACE/dist/$package.tar.gz" \
-              -C "$GITHUB_WORKSPACE/dist" "$package"
+            tar -czf "/work/dist/$package.tar.gz" -C /work/dist "$package"
             rm -rf "$package_dir"
+
+            echo "::endgroup::"
+          done
+          BUILD_SCRIPT
+            echo "::endgroup::"
           done
 
           (
@@ -226,14 +354,14 @@ jobs:
           {
             printf '# ngx_http_monitoring_module %s\n\n' "$NEXT_TAG"
             printf 'Previous tag: `%s`\n\n' "$LATEST_TAG"
-            printf 'Prebuilt Linux x86_64 dynamic module packages are attached.\n\n'
-            printf 'Each tarball is built against the Nginx version in its filename and includes:\n\n'
+            printf 'Prebuilt Linux dynamic module packages are attached for targets: `%s`.\n\n' "$NORMALIZED_TARGET_ARCHES"
+            printf 'Each tarball is built against the Nginx version and target architecture in its filename and includes:\n\n'
             printf -- '- `modules/%s.so`\n' "$MODULE_NAME"
             printf -- '- `INSTALL.md`\n'
             printf -- '- `METADATA.txt`\n'
             printf -- '- `SHA256SUMS`\n'
             printf -- '- example configuration and API docs\n\n'
-            printf 'Nginx dynamic modules are ABI-sensitive. Use the package matching your Nginx version and rebuild locally if your Nginx distribution uses incompatible build options.\n'
+            printf 'Nginx dynamic modules are ABI-sensitive. Use the package matching your Nginx version and CPU architecture, and rebuild locally if your Nginx distribution uses incompatible build options.\n'
           } > "$GITHUB_WORKSPACE/dist/RELEASE_NOTES.md"
 
       - name: Upload build artifacts
@@ -264,21 +392,31 @@ jobs:
             --title "$NEXT_TAG" \
             --notes-file dist/RELEASE_NOTES.md
 
-      - name: Build and push Docker image
+      - name: Compute Docker image name
         if: github.event.inputs.push_image == 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
+        id: image
         shell: bash
         run: |
           set -euo pipefail
           image_repo="$(echo "ghcr.io/${GITHUB_REPOSITORY}" | tr '[:upper:]' '[:lower:]')"
+          printf 'repo=%s\n' "$image_repo" >> "$GITHUB_OUTPUT"
 
-          docker build \
-            -f dockerized/Dockerfile \
-            -t "$image_repo:$NEXT_TAG" \
-            -t "$image_repo:latest" \
-            .
+      - name: Log in to GHCR
+        if: github.event.inputs.push_image == 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
 
-          echo "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
-          docker push "$image_repo:$NEXT_TAG"
-          docker push "$image_repo:latest"
+      - name: Build and push Docker image
+        if: github.event.inputs.push_image == 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: dockerized/Dockerfile
+          platforms: ${{ steps.targets.outputs.docker_platforms }}
+          push: true
+          tags: |
+            ${{ steps.image.outputs.repo }}:${{ steps.version.outputs.next_tag }}
+            ${{ steps.image.outputs.repo }}:latest
