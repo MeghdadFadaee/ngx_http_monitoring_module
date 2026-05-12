@@ -1,6 +1,6 @@
 ---
 name: ngx-http-monitoring-client
-description: Use this skill when connecting clients or agents to an ngx_http_monitoring_module service, querying its JSON/SSE/Prometheus endpoints, debugging access problems, or integrating dashboards/health checks. Supports deployments protected by Nginx Basic Auth and/or monitor_api_token.
+description: Use this skill when connecting clients or agents to an ngx_http_monitoring_module service, querying its JSON/SSE/Prometheus endpoints, reading API response structures, debugging access problems, or integrating dashboards/health checks. Supports deployments protected by Nginx Basic Auth and/or monitor_api_token.
 ---
 
 # ngx_http_monitoring_module Client
@@ -41,6 +41,400 @@ MONITOR_BASIC_AUTH=user:password
 - `GET /monitor/live` - Server-Sent Events stream
 - `GET /monitor/metrics` - Prometheus text format
 - `GET /monitor/health` - lightweight JSON health check
+
+## API Structures
+
+All JSON API responses are compact, versioned, and timestamped. Treat unknown fields as forward-compatible additions, and treat missing sections as disabled collectors, unsupported Nginx build options, or unavailable Linux `/proc` data.
+
+Common envelope:
+
+```json
+{
+  "version": 1,
+  "module": "1.0.0",
+  "timestamp": 1710000000,
+  "msec": 123,
+  "scope": "full",
+  "pid": 12345
+}
+```
+
+Endpoint-specific API routes such as `/monitor/api/system` return the common envelope plus one top-level field matching the route. The examples below show that section's value unless explicitly shown as a complete response.
+
+`GET /monitor/api` returns the envelope plus:
+
+```json
+{
+  "system": {},
+  "nginx": {},
+  "network": {},
+  "disk": {},
+  "processes": {},
+  "upstreams": [],
+  "connections": {},
+  "requests": {},
+  "history": []
+}
+```
+
+`GET /monitor/api/system`:
+
+```json
+{
+  "cpu": {
+    "usage": 12.5,
+    "cores": 8,
+    "load": [0.12, 0.20, 0.30]
+  },
+  "memory": {
+    "total": 16777216,
+    "available": 8388608,
+    "free": 4194304,
+    "used": 8388608,
+    "used_pct": 50.0
+  },
+  "swap": {
+    "total": 2097152,
+    "free": 1048576,
+    "used_pct": 50.0
+  },
+  "uptime": 123456
+}
+```
+
+`GET /monitor/api/nginx`:
+
+```json
+{
+  "connections": {
+    "accepted": 1000,
+    "handled": 1000,
+    "active": 20,
+    "reading": 1,
+    "writing": 4,
+    "waiting": 15
+  },
+  "requests": {
+    "total": 50000,
+    "responses": 49990,
+    "requests_per_sec": 125.5,
+    "responses_per_sec": 125.3
+  },
+  "ssl": {
+    "requests": 100,
+    "handshakes": 20
+  },
+  "keepalive": {
+    "requests": 250
+  },
+  "workers": []
+}
+```
+
+`GET /monitor/api/network`:
+
+```json
+{
+  "rx_bytes": 123456789,
+  "tx_bytes": 987654321,
+  "rx_packets": 10000,
+  "tx_packets": 12000,
+  "rx_errors": 0,
+  "tx_errors": 0,
+  "interfaces": [
+    {
+      "name": "eth0",
+      "rx_bytes": 123456789,
+      "tx_bytes": 987654321,
+      "rx_packets": 10000,
+      "tx_packets": 12000,
+      "rx_errors": 0,
+      "tx_errors": 0,
+      "up": true
+    }
+  ]
+}
+```
+
+`GET /monitor/api/disk`:
+
+```json
+{
+  "reads": 1000,
+  "writes": 2000,
+  "read_bytes": 4096000,
+  "write_bytes": 8192000,
+  "devices": [
+    {
+      "name": "sda",
+      "reads": 1000,
+      "writes": 2000,
+      "read_bytes": 4096000,
+      "write_bytes": 8192000,
+      "io_ms": 120
+    }
+  ],
+  "filesystems": [
+    {
+      "path": "/",
+      "type": "ext4",
+      "total": 107374182400,
+      "used": 53687091200,
+      "free": 53687091200,
+      "avail": 53687091200,
+      "files": 1000000,
+      "files_free": 750000
+    }
+  ]
+}
+```
+
+`GET /monitor/api/processes`:
+
+```json
+{
+  "process_count": 140,
+  "tcp": {
+    "established": 20,
+    "listen": 8
+  },
+  "sockets": {
+    "used": 512,
+    "tcp": 120,
+    "udp": 16
+  },
+  "workers": []
+}
+```
+
+`GET /monitor/api/connections`:
+
+```json
+{
+  "accepted": 1000,
+  "handled": 1000,
+  "active": 20,
+  "reading": 1,
+  "writing": 4,
+  "waiting": 15,
+  "ssl_requests": 100,
+  "ssl_handshakes": 20,
+  "keepalive_requests": 250,
+  "sse_clients": 2,
+  "sse_events": 500,
+  "rate_limited": 0
+}
+```
+
+`GET /monitor/api/requests`:
+
+```json
+{
+  "total": 50000,
+  "responses": 49990,
+  "bytes": 104857600,
+  "requests_per_sec": 125.5,
+  "responses_per_sec": 125.3,
+  "error_rate": 0.0078,
+  "latency": {
+    "avg": 8.4,
+    "p50": 4,
+    "p90": 15,
+    "p95": 22,
+    "p99": 80
+  },
+  "status": {
+    "1xx": 0,
+    "2xx": 49000,
+    "3xx": 600,
+    "4xx": 300,
+    "5xx": 90
+  },
+  "methods": {
+    "GET": 45000,
+    "POST": 4000,
+    "PUT": 100,
+    "DELETE": 50,
+    "HEAD": 500,
+    "OPTIONS": 200,
+    "PATCH": 50,
+    "OTHER": 100
+  },
+  "latency_histogram": [
+    {
+      "le": 1,
+      "count": 100
+    },
+    {
+      "le": "+Inf",
+      "count": 50000
+    }
+  ],
+  "size_histogram": [
+    {
+      "le": 512,
+      "count": 10000
+    },
+    {
+      "le": "+Inf",
+      "count": 50000
+    }
+  ],
+  "top_urls": [],
+  "user_agents": []
+}
+```
+
+`GET /monitor/api/upstreams`:
+
+```json
+[
+  {
+    "peer": "127.0.0.1:9000",
+    "requests": 1000,
+    "failures": 2,
+    "status_4xx": 10,
+    "status_5xx": 2,
+    "avg_latency": 12.5,
+    "last_seen": 1710000000
+  }
+]
+```
+
+History samples in `GET /monitor/api`:
+
+```json
+[
+  {
+    "timestamp": 1710000000,
+    "cpu": 12.5,
+    "memory": 50.0,
+    "swap": 0.0,
+    "rps": 125.5,
+    "responses_per_sec": 125.3,
+    "network_rx_per_sec": 1024,
+    "network_tx_per_sec": 2048,
+    "disk_read_per_sec": 0,
+    "disk_write_per_sec": 4096,
+    "latency_p95": 22,
+    "requests_total": 50000,
+    "status_4xx": 300,
+    "status_5xx": 90
+  }
+]
+```
+
+Shared nested structures:
+
+```json
+{
+  "worker": {
+    "slot": 0,
+    "pid": 12345,
+    "active": true,
+    "requests": 10000,
+    "bytes": 10485760,
+    "errors": 3,
+    "vm_size": 102400,
+    "vm_rss": 20480,
+    "voluntary_ctxt": 100,
+    "nonvoluntary_ctxt": 5,
+    "last_seen": 1710000000
+  },
+  "top_url": {
+    "url": "/api/orders",
+    "hits": 1000,
+    "errors": 3,
+    "bytes": 1048576,
+    "avg_latency": 7.8,
+    "last_seen": 1710000000
+  },
+  "user_agent": {
+    "user_agent": "curl/8.0.1",
+    "hits": 100,
+    "errors": 0,
+    "bytes": 20480,
+    "avg_latency": 2.1,
+    "last_seen": 1710000000
+  }
+}
+```
+
+SSE `GET /monitor/live` sends `metrics` events whose `data` payload has this structure:
+
+```json
+{
+  "version": 1,
+  "timestamp": 1710000000,
+  "sequence": 42,
+  "system": {
+    "cpu": {
+      "usage": 12.5,
+      "cores": 8
+    },
+    "memory": {
+      "used_pct": 50.0,
+      "total": 16777216,
+      "available": 8388608
+    }
+  },
+  "requests": {
+    "total": 50000,
+    "requests_per_sec": 125.5,
+    "responses_per_sec": 125.3,
+    "latency": {
+      "p95": 22,
+      "p99": 80
+    },
+    "status": {
+      "4xx": 300,
+      "5xx": 90
+    }
+  },
+  "connections": {
+    "active": 20,
+    "reading": 1,
+    "writing": 4,
+    "waiting": 15,
+    "sse_clients": 2,
+    "keepalive_requests": 250
+  },
+  "network": {
+    "rx_bytes": 123456789,
+    "tx_bytes": 987654321
+  },
+  "disk": {
+    "read_bytes": 4096000,
+    "write_bytes": 8192000
+  }
+}
+```
+
+`GET /monitor/metrics` exposes Prometheus text metrics including:
+
+```text
+nginx_monitor_requests_total
+nginx_monitor_active_connections
+nginx_monitor_cpu_usage_ratio
+nginx_monitor_memory_used_ratio
+nginx_monitor_latency_p95_ms
+```
+
+`GET /monitor/health` returns a complete health response:
+
+```json
+{
+  "version": 1,
+  "module": "1.0.0",
+  "timestamp": 1710000000,
+  "msec": 123,
+  "scope": "health",
+  "pid": 12345,
+  "status": "ok",
+  "generation": 100,
+  "sse_clients": 2
+}
+```
 
 ## Auth Rules
 
