@@ -1,7 +1,7 @@
-ARG DEBIAN_VERSION=bookworm
+ARG BASE_IMAGE=debian:bookworm-slim
 ARG NGINX_VERSION=1.28.0
 
-FROM debian:${DEBIAN_VERSION}-slim AS builder
+FROM ${BASE_IMAGE} AS builder
 
 ARG NGINX_VERSION
 ARG NGINX_CONFIGURE_ARGS="--with-compat --with-http_ssl_module --with-http_stub_status_module --with-http_realip_module --with-http_v2_module --with-http_gzip_static_module"
@@ -48,9 +48,10 @@ RUN ./configure \
     && cp objs/ngx_http_monitoring_module.so /usr/local/nginx/modules/
 
 
-FROM debian:${DEBIAN_VERSION}-slim AS runtime
+FROM ${BASE_IMAGE} AS runtime
 
 ARG NGINX_VERSION
+ARG OPENSSL_RUNTIME_PACKAGE=libssl3
 
 LABEL org.opencontainers.image.title="ngx_http_monitoring_module nginx image" \
       org.opencontainers.image.description="Nginx built with ngx_http_monitoring_module and embedded monitoring dashboard" \
@@ -60,7 +61,7 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ca-certificates \
         libpcre2-8-0 \
-        libssl3 \
+        ${OPENSSL_RUNTIME_PACKAGE} \
         zlib1g \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --system --gid 101 nginx \

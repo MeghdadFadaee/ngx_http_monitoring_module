@@ -13,7 +13,7 @@ permissions:
   contents: read
 
 env:
-  TEST_BUILD_IMAGE: ubuntu:22.04
+  TEST_BUILD_IMAGE: ubuntu:18.04
   NGINX_CONFIGURE_ARGS: >-
     --with-compat
     --with-http_ssl_module

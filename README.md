@@ -36,6 +36,8 @@ The compiled module is written to:
 build/ngx_http_monitoring_module.so
 ```
 
+The source avoids glibc-only mount parsing APIs such as `getmntent()` and parses `/proc/mounts` directly, which keeps the collectors portable across Linux libc implementations that expose the required `/proc`, `statvfs()`, and `getifaddrs()` interfaces.
+
 ## Docker Image
 
 A Dockerized Nginx image is available in [dockerized](</dockerized>):

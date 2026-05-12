@@ -5,7 +5,6 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <ifaddrs.h>
-#include <mntent.h>
 #include <net/if.h>
 #include <stdio.h>
 #include <string.h>
@@ -41,6 +40,9 @@ static ngx_atomic_uint_t ngx_http_monitoring_sum_disk(
 static ngx_atomic_uint_t ngx_http_monitoring_delta(ngx_atomic_uint_t now,
     ngx_atomic_uint_t prev);
 static ngx_uint_t ngx_http_monitoring_skip_fs(const char *type);
+static char *ngx_http_monitoring_next_mount_field(char **cursor);
+static void ngx_http_monitoring_copy_mount_field(u_char *dst, size_t size,
+    char *src);
 
 
 ngx_int_t
@@ -599,25 +601,45 @@ static void
 ngx_http_monitoring_collect_filesystems(ngx_http_monitoring_shctx_t *sh)
 {
     FILE             *fp;
-    struct mntent    *mnt;
+    char              line[4096], *cursor, *source, *mount, *type;
+    u_char            mount_path[4096], fs_type[NGX_HTTP_MONITORING_NAME_LEN];
     struct statvfs    st;
     ngx_uint_t        count;
     uint64_t          total, free_bytes, avail, used;
 
-    fp = setmntent("/proc/mounts", "r");
+    fp = fopen("/proc/mounts", "r");
     if (fp == NULL) {
         return;
     }
 
     count = 0;
-    while ((mnt = getmntent(fp)) != NULL
-           && count < NGX_HTTP_MONITORING_FILESYSTEMS_MAX)
+    while (count < NGX_HTTP_MONITORING_FILESYSTEMS_MAX
+           && fgets(line, sizeof(line), fp) != NULL)
     {
-        if (ngx_http_monitoring_skip_fs(mnt->mnt_type)) {
+        cursor = line;
+        source = ngx_http_monitoring_next_mount_field(&cursor);
+        mount = ngx_http_monitoring_next_mount_field(&cursor);
+        type = ngx_http_monitoring_next_mount_field(&cursor);
+
+        if (source == NULL || mount == NULL || type == NULL) {
             continue;
         }
 
-        if (statvfs(mnt->mnt_dir, &st) != 0 || st.f_blocks == 0) {
+        (void) source;
+
+        ngx_http_monitoring_copy_mount_field(mount_path, sizeof(mount_path),
+                                             mount);
+        ngx_http_monitoring_copy_mount_field(fs_type, sizeof(fs_type), type);
+
+        if (mount_path[0] == '\0' || fs_type[0] == '\0') {
+            continue;
+        }
+
+        if (ngx_http_monitoring_skip_fs((char *) fs_type)) {
+            continue;
+        }
+
+        if (statvfs((char *) mount_path, &st) != 0 || st.f_blocks == 0) {
             continue;
         }
 
@@ -626,9 +648,9 @@ ngx_http_monitoring_collect_filesystems(ngx_http_monitoring_shctx_t *sh)
         avail = (uint64_t) st.f_bavail * st.f_frsize;
         used = total - free_bytes;
 
-        ngx_cpystrn(sh->filesystems[count].path, (u_char *) mnt->mnt_dir,
+        ngx_cpystrn(sh->filesystems[count].path, mount_path,
                     NGX_HTTP_MONITORING_KEY_LEN);
-        ngx_cpystrn(sh->filesystems[count].type, (u_char *) mnt->mnt_type,
+        ngx_cpystrn(sh->filesystems[count].type, fs_type,
                     NGX_HTTP_MONITORING_NAME_LEN);
         sh->filesystems[count].total = (ngx_atomic_uint_t) total;
         sh->filesystems[count].used = (ngx_atomic_uint_t) used;
@@ -640,7 +662,7 @@ ngx_http_monitoring_collect_filesystems(ngx_http_monitoring_shctx_t *sh)
         count++;
     }
 
-    endmntent(fp);
+    fclose(fp);
     sh->fs_count = count;
 }
 
@@ -819,6 +841,72 @@ static ngx_atomic_uint_t
 ngx_http_monitoring_delta(ngx_atomic_uint_t now, ngx_atomic_uint_t prev)
 {
     return now >= prev ? now - prev : 0;
+}
+
+
+static char *
+ngx_http_monitoring_next_mount_field(char **cursor)
+{
+    char *p, *start;
+
+    p = *cursor;
+
+    while (*p == ' ' || *p == '\t') {
+        p++;
+    }
+
+    if (*p == '\0' || *p == '\n') {
+        *cursor = p;
+        return NULL;
+    }
+
+    start = p;
+
+    while (*p != '\0' && *p != '\n' && *p != ' ' && *p != '\t') {
+        p++;
+    }
+
+    if (*p != '\0') {
+        *p++ = '\0';
+    }
+
+    *cursor = p;
+
+    return start;
+}
+
+
+static void
+ngx_http_monitoring_copy_mount_field(u_char *dst, size_t size, char *src)
+{
+    u_char      *p, *last;
+    ngx_uint_t   value;
+
+    if (size == 0) {
+        return;
+    }
+
+    p = dst;
+    last = dst + size - 1;
+
+    while (*src != '\0' && p < last) {
+        if (src[0] == '\\'
+            && src[1] >= '0' && src[1] <= '7'
+            && src[2] >= '0' && src[2] <= '7'
+            && src[3] >= '0' && src[3] <= '7')
+        {
+            value = (ngx_uint_t) ((src[1] - '0') * 64
+                                  + (src[2] - '0') * 8
+                                  + (src[3] - '0'));
+            *p++ = (u_char) value;
+            src += 4;
+            continue;
+        }
+
+        *p++ = (u_char) *src++;
+    }
+
+    *p = '\0';
 }
 
 

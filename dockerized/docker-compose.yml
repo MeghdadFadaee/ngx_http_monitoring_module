@@ -4,7 +4,9 @@ services:
       context: ..
       dockerfile: dockerized/Dockerfile
       args:
+        BASE_IMAGE: "debian:bookworm-slim"
         NGINX_VERSION: "1.28.0"
+        OPENSSL_RUNTIME_PACKAGE: "libssl3"
     image: ngx-http-monitoring-module:local
     container_name: ngx-http-monitoring-module
     ports:

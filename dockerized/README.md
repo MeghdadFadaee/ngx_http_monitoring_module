@@ -22,6 +22,12 @@ To choose a different Nginx version:
 NGINX_VERSION=1.28.0 sh dockerized/build.sh
 ```
 
+To build the image on an Ubuntu Bionic 18.04 libc baseline:
+
+```sh
+BASE_IMAGE=ubuntu:18.04 OPENSSL_RUNTIME_PACKAGE=libssl1.1 sh dockerized/build.sh
+```
+
 ## Run
 
 ```sh

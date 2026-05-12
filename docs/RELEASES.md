@@ -1,6 +1,6 @@
 # Release Builds
 
-The GitHub Actions workflow in `.github/workflows/release.yml` builds ready-to-use Linux dynamic module packages for x86_64 and ARM targets.
+The GitHub Actions workflow in `.github/workflows/release.yml` builds ready-to-use Linux dynamic module packages for x86_64 and ARM targets. Release binaries are built in Ubuntu Bionic 18.04 containers, giving the module artifacts a `ubuntu-bionic-glibc-2.27` libc baseline.
 
 ## Manual Release Only
 
@@ -71,6 +71,13 @@ ghcr.io/<owner>/<repo>:latest
 
 The image is built with Docker Buildx for the same normalized target platforms requested by `target_arches`.
 
+The release image build passes:
+
+```text
+BASE_IMAGE=ubuntu:18.04
+OPENSSL_RUNTIME_PACKAGE=libssl1.1
+```
+
 ## Compatibility Warning
 
-Nginx dynamic modules are ABI-sensitive. The release packages are built with `--with-compat` on Ubuntu 22.04 against the Nginx version and CPU architecture in the filename. Use the matching Nginx version, CPU architecture, and a compatible Linux/glibc runtime. Rebuild locally when using a vendor Nginx package with materially different module ABI or hardening options.
+Nginx dynamic modules are ABI-sensitive. The release packages are built with `--with-compat` on Ubuntu Bionic 18.04 against the Nginx version and CPU architecture in the filename. Use the matching Nginx version, CPU architecture, and a Linux/glibc runtime compatible with `ubuntu-bionic-glibc-2.27`. Rebuild locally when using a vendor Nginx package with materially different module ABI or hardening options.

@@ -34,7 +34,8 @@ env:
   DEFAULT_NGINX_VERSIONS: "1.22.1 1.24.0 1.26.3 1.28.0 1.30.0"
   DEFAULT_TARGET_ARCHES: "linux-x86_64 linux-arm64 linux-armv7"
   MODULE_NAME: ngx_http_monitoring_module
-  RELEASE_BUILD_IMAGE: ubuntu:22.04
+  RELEASE_BUILD_IMAGE: ubuntu:18.04
+  RELEASE_LIBC_BASELINE: ubuntu-bionic-glibc-2.27
   NGINX_CONFIGURE_ARGS: >-
     --with-compat
     --with-http_ssl_module
@@ -226,6 +227,7 @@ jobs:
               -e NEXT_VERSION \
               -e NGINX_CONFIGURE_ARGS \
               -e RELEASE_BUILD_IMAGE \
+              -e RELEASE_LIBC_BASELINE \
               -e TARGET_ARCH="$target_arch" \
               -v "$GITHUB_WORKSPACE:/work" \
               -w /work \
@@ -306,6 +308,7 @@ jobs:
               printf 'target=%s\n' "$TARGET_ARCH"
               printf 'docker_platform=%s\n' "$DOCKER_PLATFORM"
               printf 'build_image=%s\n' "$RELEASE_BUILD_IMAGE"
+              printf 'libc_baseline=%s\n' "$RELEASE_LIBC_BASELINE"
               printf 'build_machine=%s\n' "$(uname -m)"
               printf 'runner=ubuntu-22.04\n'
               printf 'git_ref=%s\n' "$GITHUB_REF"
@@ -318,6 +321,7 @@ jobs:
               printf '# %s for Nginx %s\n\n' "$MODULE_NAME" "$nginx_version"
               printf 'Release: `%s`\n\n' "$NEXT_TAG"
               printf 'Target: `%s` (`%s`)\n\n' "$TARGET_ARCH" "$DOCKER_PLATFORM"
+              printf 'Libc baseline: `%s`\n\n' "$RELEASE_LIBC_BASELINE"
               printf 'This package contains a prebuilt Linux dynamic module:\n\n'
               printf '```text\n'
               printf 'modules/%s.so\n' "$MODULE_NAME"
@@ -326,8 +330,8 @@ jobs:
               printf '```nginx\n'
               printf 'load_module modules/%s.so;\n' "$MODULE_NAME"
               printf '```\n\n'
-              printf 'This binary is built with `--with-compat` against Nginx %s on Ubuntu 22.04 for %s. ' "$nginx_version" "$TARGET_ARCH"
-              printf 'For safest production use, run the same Nginx version, CPU architecture, and a compatible Linux/glibc environment. '
+              printf 'This binary is built with `--with-compat` against Nginx %s on Ubuntu Bionic 18.04 for %s. ' "$nginx_version" "$TARGET_ARCH"
+              printf 'For safest production use, run the same Nginx version, CPU architecture, and a Linux/glibc environment compatible with `%s`. ' "$RELEASE_LIBC_BASELINE"
               printf 'If your Nginx package has a materially different module ABI, rebuild from source with this repository.\n'
             } > "$package_dir/INSTALL.md"
 
@@ -354,6 +358,7 @@ jobs:
           {
             printf '# ngx_http_monitoring_module %s\n\n' "$NEXT_TAG"
             printf 'Previous tag: `%s`\n\n' "$LATEST_TAG"
+            printf 'Libc baseline: `%s`\n\n' "$RELEASE_LIBC_BASELINE"
             printf 'Prebuilt Linux dynamic module packages are attached for targets: `%s`.\n\n' "$NORMALIZED_TARGET_ARCHES"
             printf 'Each tarball is built against the Nginx version and target architecture in its filename and includes:\n\n'
             printf -- '- `modules/%s.so`\n' "$MODULE_NAME"
@@ -417,6 +422,9 @@ jobs:
           file: dockerized/Dockerfile
           platforms: ${{ steps.targets.outputs.docker_platforms }}
           push: true
+          build-args: |
+            BASE_IMAGE=ubuntu:18.04
+            OPENSSL_RUNTIME_PACKAGE=libssl1.1
           tags: |
             ${{ steps.image.outputs.repo }}:${{ steps.version.outputs.next_tag }}
             ${{ steps.image.outputs.repo }}:latest

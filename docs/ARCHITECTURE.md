@@ -58,3 +58,5 @@ Upstream metrics are passively observed from Nginx upstream state recorded on pr
 ## Compatibility
 
 The module is designed as an Nginx dynamic HTTP module and should be built with `--with-compat` against the target Nginx source tree. Stub-status counters are compiled in when the target Nginx build includes `--with-http_stub_status_module`; otherwise request counters still work but low-level active/reading/writing/waiting counters remain zero.
+
+Collectors avoid glibc-only helpers such as `getmntent()` and parse `/proc/mounts` directly. This keeps filesystem collection compatible with libc implementations that do not ship `<mntent.h>`, while still requiring Linux `/proc`, `statvfs()`, and `getifaddrs()`.
